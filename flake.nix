@@ -76,6 +76,8 @@
     {
       packages.${system}.default = fhsEnv;
 
+      nixosModules.default = ./nix/nixos-module.nix;
+
       apps.${system}.default = {
         type = "app";
         program = "${fhsEnv}/bin/build-fhs";

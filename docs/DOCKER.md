@@ -105,6 +105,11 @@ They set what the commands above set: the GPU (`deploy.resources.reservations.de
 `stop_grace_period`, the `strata-data` volume, and the port bound to `127.0.0.1`. To let other computers reach it, set
 `STRATA_BIND=0.0.0.0` in `.env` and keep a real `API_KEY`.
 
+## NixOS
+
+The repository also carries a NixOS module that runs the same pre-built image as a rootless Podman container under systemd,
+with the GPU devices, memory pinning, stop timeout and data directory set for you: [nix/README.md](../nix/README.md).
+
 ## Settings
 
 Everything is an environment variable (`-e NAME=value`, or in compose). They are the same questions `strata launch` asks on its
