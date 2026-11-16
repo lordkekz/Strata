@@ -1,49 +1,84 @@
 {
-  description = "Nix environment for Strata";
+  description = "Generic FHS environment for C/C++ toolchains, Python, and GPU computing";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
   };
 
-  outputs = { self, nixpkgs, ... }:
+  outputs = { self, nixpkgs }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        # Allow NVIDIA's CUDA toolkit (nvcc, cudart, cuBLAS, ...).
         config.allowUnfree = true;
-        config.cudaSupport = true;
       };
 
-      # setup.py wants CUDA 13.0: the ready-made engine is built with 13.0.88, and 13.2.0/13.2.1 miscompile for sm_120.
-      cudaPackages = pkgs.cudaPackages_13_0;
-      # One merged toolkit root (bin/nvcc, include/, lib/ with cudart and cuBLAS) for CUDA_HOME / CUDAToolkit_ROOT.
-      cuda = cudaPackages.cudatoolkit;
-      # The gcc that this nvcc supports as its host compiler.
-      stdenv = cudaPackages.backendStdenv;
+      pythonEnv = pkgs.python313.withPackages (ps: with ps; [
+        pip
+        virtualenv
+        setuptools
+        wheel
+        # Dépendances requises par Strata et son serveur
+        jinja2
+        numpy
+        requests
+        pyyaml
+        regex
+        tqdm
+        pillow
+        psutil
+      ]);
 
+      fhsEnv = pkgs.buildFHSEnv {
+        name = "build-fhs";
+        targetPkgs = pkgs: with pkgs; [
+          # Chaîne de compilation C/C++ de base
+          gcc
+          gcc.cc
+          glibc
+          glibc.dev
+          stdenv.cc.cc.lib
+          binutils
+
+          # Outils de métaconstruction
+          cmake
+          ninja
+          gnumake
+          pkg-config
+          git
+
+          # Débogage et introspection
+          gdb
+          valgrind
+
+          # Interpréteur Python enveloppé avec ses modules
+          pythonEnv
+
+          # Bibliothèques système standard pour liaisons dynamiques
+          zlib
+          ncurses
+          libxml2
+          numactl
+          pciutils
+          libdrm
+          util-linux
+        ];
+
+        profile = ''
+          export HARDENING_DISABLE=all
+          export LIBRARY_PATH="/usr/lib:/usr/lib64:$LIBRARY_PATH"
+          export CPATH="/usr/include:$CPATH"
+        '';
+
+        runScript = "bash --norc --noprofile";
+      };
     in
     {
-      devShells."${system}" = {
-        default = (pkgs.mkShell.override { inherit stdenv; }) {
-          packages = with pkgs; [
-            # ./setup.sh: makes .venv and runs setup.py
-            python3
+      packages.${system}.default = fhsEnv;
 
-            # setup.py's engine build. cmake/ninja from PATH: the pip wheels' binaries do not run on NixOS.
-            cuda
-            cmake
-            ninja
-          ];
-
-          shellHook = ''
-            export CUDA_HOME=${cuda}
-            export CUDA_PATH=${cuda}
-            export CUDAHOSTCXX=${stdenv.cc}/bin/c++
-            # The pip wheels in .venv (numpy, pillow, ...) need libstdc++ and zlib; the engine needs the driver's libcuda.
-            export LD_LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.lib.makeLibraryPath [ stdenv.cc.cc.lib pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-          '';
-        };
+      apps.${system}.default = {
+        type = "app";
+        program = "${fhsEnv}/bin/build-fhs";
       };
     };
 }
