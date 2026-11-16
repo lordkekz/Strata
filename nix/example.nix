@@ -11,13 +11,9 @@
   services.strata = {
     enable = true;
 
-    # Optional: put the API key in a file instead of letting the image create
-    # one in the data directory. The file contains KEY=value lines and must be
-    # readable by the `strata` service account, for example:
-    #
-    #   API_KEY=<openssl rand -hex 24>
-    #
-    # With sops-nix:
+    # Optional: use a key of your own instead of letting the image create one
+    # in the data directory. Provision the file with a secret manager and make
+    # it readable by the `strata` service account. With sops-nix:
     #
     #   sops.secrets."strata/env".owner = "strata";
     #   services.strata.environmentFile = config.sops.secrets."strata/env".path;

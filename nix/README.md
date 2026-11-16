@@ -30,6 +30,7 @@ With the flake:
         ./hardware-configuration.nix
         {
           services.strata.enable = true;
+          # Provisioned by sops-nix or agenix, not written by hand.
           services.strata.environmentFile = "/run/secrets/strata.env";
         }
       ];
@@ -48,34 +49,33 @@ A complete minimal example is in [example.nix](example.nix).
 
 ## The API key
 
-The image always requires a key and refuses to serve without one. Put it in a
-file passed with `environmentFile` (`KEY=value` lines, normally one line):
+The image always requires a key and refuses to serve without one. There are
+two supported ways to provide it.
 
-```sh
-install -d -m 0700 -o strata -g strata /run/secrets   # or use sops-nix / agenix
-printf 'API_KEY=%s\n' "$(openssl rand -hex 24)" > /run/secrets/strata.env
-chown strata /run/secrets/strata.env && chmod 0400 /run/secrets/strata.env
-```
-
-The file is read by the service account, so a secret manager has to make it
-readable by `strata`:
-
-```nix
-sops.secrets."strata/env".owner = "strata";          # sops-nix
-services.strata.environmentFile = config.sops.secrets."strata/env".path;
-```
-
-If `environmentFile` is left unset, the image generates a key on first start,
-keeps it in `dataDir`, and logs how to show it:
+Leave `environmentFile` unset and let the image create the key on first start.
+It is kept in `dataDir` and the log says how to show it:
 
 ```sh
 sudo -u strata env HOME=/var/lib/strata/home XDG_RUNTIME_DIR=/run/strata \
   podman exec strata strata launch --show-key --preset docker
 ```
 
-The file may also carry any other image variable from
-[docs/DOCKER.md](../../docs/DOCKER.md#settings). The typed `services.strata`
+To use a key of your own, provision it with a secret manager and point
+`environmentFile` at the generated file. With sops-nix:
+
+```nix
+sops.secrets."strata/env".owner = "strata";
+services.strata.environmentFile = config.sops.secrets."strata/env".path;
+```
+
+The secret holds `KEY=value` lines, normally one line (`API_KEY=...`). It is
+read as the service account, so make it readable by `strata` (`owner` above).
+It may also carry any other image variable from
+[docs/DOCKER.md](../../docs/DOCKER.md#settings); the typed `services.strata`
 options are applied after it and win.
+
+Do not create the file by hand: a path under `/run` is memory-backed, so the
+file disappears on reboot and the unit fails to start.
 
 ## Settings
 

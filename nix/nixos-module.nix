@@ -30,12 +30,20 @@ let
   isLoopbackAddress =
     address: builtins.elem address [ "127.0.0.1" "::1" "localhost" "ip6-localhost" ];
 
-  # `podman run -p` wants IPv6 addresses in brackets.
+  # `podman run -p` wants an IP literal, so the loopback names people write are
+  # mapped to their addresses before the port is published.
   publishedAddress =
-    if lib.hasInfix ":" cfg.bindAddress && !(lib.hasPrefix "[" cfg.bindAddress) then
-      "[${cfg.bindAddress}]"
+    let
+      address =
+        {
+          localhost = "127.0.0.1";
+          ip6-localhost = "::1";
+        }.${cfg.bindAddress} or cfg.bindAddress;
+    in
+    if lib.hasInfix ":" address && !(lib.hasPrefix "[" address) then
+      "[${address}]"
     else
-      cfg.bindAddress;
+      address;
 
   # Environment variables understood by the image (docs/DOCKER.md, "Settings").
   # The image saves them as the preset `PRESET`; unset ones keep the saved value.
@@ -106,9 +114,9 @@ in
       type = types.str;
       default = "strata";
       description = ''
-        Account that runs rootless Podman. Rootless mode is what keeps the
-        container out of the system's root account; the image itself still runs
-        as root *inside* its user namespace.
+        Account that runs rootless Podman; must not be `root`. Rootless mode is
+        what keeps the container out of the system's root account; the image
+        itself still runs as root *inside* its user namespace.
       '';
     };
 
@@ -122,7 +130,10 @@ in
 
         Set to `false` to use an account that already exists. That account then
         needs a subuid/subgid range and membership in `video` and `render`
-        itself; this module does not modify it.
+        itself; this module does not create it or change its groups. It does
+        still enable lingering (`users.users.<user>.linger = mkDefault true`),
+        which rootless Podman recommends; set that option to `false` explicitly
+        if the account must not linger.
       '';
     };
 
@@ -221,10 +232,13 @@ in
       example = "/run/secrets/strata.env";
       description = ''
         File passed to the container with `podman run --env-file`: `KEY=value`
-        lines, normally just
-        `API_KEY=<openssl rand -hex 24>`.
+        lines, normally just the API key (`API_KEY=...`). Provision it
+        declaratively with a secret manager such as sops-nix or agenix; the
+        module does not create or manage this file. Creating it by hand is not
+        supported: a path under `/run` is memory-backed, so the file is gone
+        after a reboot and the service fails to start.
 
-        The file is read as the service account, so a secret manager must make
+        The file is read as the service account, so the secret manager must make
         it readable by that account (for example `owner = "strata"` in
         sops-nix). It can also carry any other image variable from
         [docs/DOCKER.md](../../docs/DOCKER.md#settings); the typed options below
@@ -469,6 +483,21 @@ in
         '';
       }
       {
+        assertion = cfg.user != "root";
+        message = ''
+          services.strata.user must be a dedicated non-root account: this
+          module runs rootless Podman. "root" would switch the container to
+          rootful Podman.
+        '';
+      }
+      {
+        assertion = cfg.uid == null || cfg.createUser;
+        message = ''
+          services.strata.uid applies only when services.strata.createUser is
+          true. Set the uid on users.users.${cfg.user} instead.
+        '';
+      }
+      {
         assertion = cfg.createUser
           || config.users.users.${cfg.user}.isSystemUser
           || config.users.users.${cfg.user}.isNormalUser;
@@ -502,6 +531,10 @@ in
         assertion = cfg.parallel == null || (cfg.parallel >= 1 && cfg.parallel <= 8);
         message = "services.strata.parallel must be between 1 and 8 (PARALLEL).";
       }
+      {
+        assertion = cfg.stopTimeout == null || cfg.stopTimeout >= 0;
+        message = "services.strata.stopTimeout must be zero or greater (podman --stop-timeout is unsigned).";
+      }
     ];
 
     warnings = lib.optionals (!cfg.createUser) [
@@ -515,7 +548,7 @@ in
         services.strata is published on ${cfg.bindAddress} without an
         environmentFile. The image generates an API key into
         ${cfg.dataDir}/state; clients need it. Set services.strata.environmentFile
-        to a file containing API_KEY=... next to a long key.
+        to a secret from your secret manager with a long API_KEY.
       ''
     ] ++ lib.optionals (cfg.port < 1024) [
       ''
@@ -530,7 +563,7 @@ in
     virtualisation.podman.enable = mkDefault true;
     virtualisation.oci-containers.backend = mkDefault "podman";
 
-    users.users.${cfg.user} = lib.mkMerge [
+    users.users.${cfg.user} = mkIf (cfg.user != "root") (lib.mkMerge [
       (mkIf cfg.createUser {
         isSystemUser = true;
         inherit (cfg) uid;
@@ -547,9 +580,9 @@ in
       # stay at its `null` default for a non-root podman user; linger also gives
       # the account a user manager, which is Podman's recommended setup.
       { linger = mkDefault true; }
-    ];
+    ]);
 
-    users.groups.${cfg.user} = mkIf cfg.createUser { };
+    users.groups.${cfg.user} = mkIf (cfg.createUser && cfg.user != "root") { };
 
     systemd.tmpfiles.rules =
       [
